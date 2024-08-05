@@ -67,7 +67,6 @@ jwt = JWTManager(app)
 # Initialize Nubank API client and authenticate
 nubank = Nubank()
 # With certificate generated
-# nubank.authenticate_with_cert(CPF, PASSWORD, cert_path='/Users/gugadam/workspaces/openbank/pynubank/cert.p12')
 cached_nubank = CachedNubank(nubank)
 
 # Encryption key (store it securely, not hard-coded in production)
@@ -239,4 +238,5 @@ def exchange_certs():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    app.run(host='192.168.15.4', port=5000)
+    # gunicorn -w 4 -b 192.168.15.4:5000 examples.flask-server:app

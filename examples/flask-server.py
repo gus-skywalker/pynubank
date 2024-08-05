@@ -1,10 +1,13 @@
 import os
 import uuid
+import random
+import string
 from datetime import timedelta
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
 from cryptography.fernet import Fernet
 from flask import Flask, jsonify, request
-from pynubank import Nubank
+from pynubank import Nubank, NuException
+from pynubank.utils.certificate_generator import CertificateGenerator
 
 app = Flask(__name__)
 
@@ -78,9 +81,12 @@ def get_cert_path(cpf):
     return cert_path
 
 def secure_storage_get_cert_path(cpf):
-    # Implementação para buscar do armazenamento seguro (exemplo, banco de dados)
-    # Este exemplo retorna um caminho codificado
-    return 'encrypted_cert_path_base64'
+    # Buscar o caminho do certificado no diretório baseado no CPF
+    cpf_part = cpf[-4:]  # Use last 4 digits of CPF
+    for filename in os.listdir(CERT_DIR):
+        if filename.endswith('.p12') and filename.endswith(cpf_part + '.p12'):
+            return os.path.join(CERT_DIR, filename)
+    raise FileNotFoundError("Certificado não encontrado para o CPF fornecido.")
 
 @app.route('/authenticate', methods=['POST'])
 def authenticate():
@@ -168,8 +174,18 @@ CERT_DIR = 'resource/certificates'  # Alterar para o caminho do diretório desej
 if not os.path.exists(CERT_DIR):
     os.makedirs(CERT_DIR)
 
-@app.route('/generate-cert', methods=['POST'])
-def generate_cert():
+# Função para gerar um ID aleatório
+def generate_random_id() -> str:
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
+
+# Função para salvar o certificado
+def save_cert(cert, name):
+    path = os.path.join(CERT_DIR, name)
+    with open(path, 'wb') as cert_file:
+        cert_file.write(cert.export())
+
+@app.route('/request-code', methods=['POST'])
+def request_code():
     data = request.json
     cpf = data.get('cpf')
     password = data.get('password')
@@ -178,15 +194,47 @@ def generate_cert():
         return jsonify({'error': 'CPF and password are required'}), 400
 
     try:
-        # Generate a unique filename for the certificate
+        device_id = generate_random_id()
+        generator = CertificateGenerator(cpf, password, device_id)
+
+        # Solicitar código de email
+        email = generator.request_code()
+        # Salvar informações do dispositivo e do gerador de certificado na sessão
+        session_id = str(uuid.uuid4())
+        app.config[session_id] = generator
+
+        return jsonify({'message': f'Email sent to {email}', 'session_id': session_id}), 200
+    except NuException as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Rota para trocar o código pelo certificado
+@app.route('/exchange-certs', methods=['POST'])
+def exchange_certs():
+    data = request.json
+    session_id = data.get('session_id')
+    cpf = data.get("cpf")
+    code = data.get('code')
+
+    if not session_id or not code:
+        return jsonify({'error': 'Session ID and code are required'}), 400
+
+    try:
+        generator = app.config.get(session_id)
+        if not generator:
+            return jsonify({'error': 'Invalid session ID'}), 400
+
+        cert1, cert2 = generator.exchange_certs(code)
+
+        # Salvar o certificado
         cpf_part = cpf[-4:]  # Use last 4 digits of CPF
         cert_filename = f"{uuid.uuid4()}_{cpf_part}.p12"
-        cert_path = os.path.join(CERT_DIR, cert_filename)
-
-        # Authenticate and generate the certificate
-        nubank.authenticate_with_cert(cpf, password, cert_path)
+        save_cert(cert1, cert_filename)
 
         return jsonify({'message': 'Certificate generated successfully', 'cert_id': cert_filename}), 200
+    except NuException as e:
+        return jsonify({'error': str(e)}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

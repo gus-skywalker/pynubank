@@ -238,5 +238,5 @@ def exchange_certs():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='192.168.15.4', port=5000)
+    app.run(host='192.168.15.3', port=8080)
     # gunicorn -w 4 -b 192.168.15.4:5000 examples.flask-server:app

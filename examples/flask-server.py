@@ -75,8 +75,10 @@ cipher = Fernet(ENCRYPTION_KEY)
 
 def get_cert_path(cpf):
     # Buscar caminho criptografado do certificado do armazenamento seguro
-    encrypted_cert_path = secure_storage_get_cert_path(cpf)
-    cert_path = cipher.decrypt(encrypted_cert_path.encode()).decode()
+    file_name = secure_storage_get_cert_path(cpf)
+    # cert_path = cipher.decrypt(file_name.encode()).decode()
+    # print(cert_path)
+    cert_path = os.path.join(CERT_DIR, file_name)
     return cert_path
 
 def secure_storage_get_cert_path(cpf):
@@ -84,7 +86,7 @@ def secure_storage_get_cert_path(cpf):
     cpf_part = cpf[-4:]  # Use last 4 digits of CPF
     for filename in os.listdir(CERT_DIR):
         if filename.endswith('.p12') and filename.endswith(cpf_part + '.p12'):
-            return os.path.join(CERT_DIR, filename)
+            return filename
     raise FileNotFoundError("Certificado não encontrado para o CPF fornecido.")
 
 @app.route('/authenticate', methods=['POST'])
@@ -208,8 +210,7 @@ def request_code():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Rota para trocar o código pelo certificado
-@app.route('/exchange-certs', methods=['POST'])
+@app.route('/exchange-cert', methods=['POST'])
 def exchange_certs():
     data = request.json
     session_id = data.get('session_id')
@@ -220,18 +221,37 @@ def exchange_certs():
         return jsonify({'error': 'Session ID and code are required'}), 400
 
     try:
+        # # Check if certificate already exists
+        cpf_part = cpf[-4:]  # Use last 4 digits of CPF
+        existing_cert = None
+        for filename in os.listdir(CERT_DIR):
+            if filename.endswith('.p12') and filename.endswith(cpf_part + '.p12'):
+                existing_cert = filename
+                break
+
+        if existing_cert:
+            cert_path = os.path.join(CERT_DIR, existing_cert)
+            try:
+                # Attempt to decrypt the existing certificate to verify it
+                with open(cert_path, 'rb') as cert_file:
+                    cert_content = cert_file.read() # Replace with your decryption logic
+                return jsonify({'message': 'Certificate already exists and is valid', 'cert_id': existing_cert}), 200
+            except Exception as e:
+                return jsonify({'error': 'Certificate file exists but is invalid. Please regenerate.'}), 400
+
+        # Proceed to generate a new certificate if not found
         generator = app.config.get(session_id)
         if not generator:
             return jsonify({'error': 'Invalid session ID'}), 400
 
         cert1, cert2 = generator.exchange_certs(code)
 
-        # Salvar o certificado
-        cpf_part = cpf[-4:]  # Use last 4 digits of CPF
+        # Save the new certificate
         cert_filename = f"{uuid.uuid4()}_{cpf_part}.p12"
         save_cert(cert1, cert_filename)
 
         return jsonify({'message': 'Certificate generated successfully', 'cert_id': cert_filename}), 200
+
     except NuException as e:
         return jsonify({'error': str(e)}), 500
     except Exception as e:
